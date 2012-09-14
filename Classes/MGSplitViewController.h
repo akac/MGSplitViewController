@@ -25,12 +25,17 @@ typedef enum _MGSplitViewDividerStyle {
 	BOOL _masterBeforeDetail;
 	NSMutableArray *_viewControllers;
 	UIBarButtonItem *_barButtonItem; // To be compliant with wacky UISplitViewController behaviour.
-    UIPopoverController *_hiddenPopoverController; // Popover used to hold the master view if it's not always visible.
+//    UIPopoverController *_hiddenPopoverController; // Popover used to hold the master view if it's not always visible.
+	BOOL hasHiddenViewController;
+	BOOL hiddenViewControllerDisplayed;
 	MGSplitDividerView *_dividerView; // View that draws the divider between the master and detail views.
 	NSArray *_cornerViews; // Views to draw the inner rounded corners between master and detail views.
 	float _splitPosition;
 	BOOL _reconfigurePopup;
 	MGSplitViewDividerStyle _dividerStyle; // Meta-setting which configures several aspects of appearance and behaviour.
+	
+	UITapGestureRecognizer* tapGestureRecognizerForMasterOnDetail;
+	UIView* clearViewForMasterOnDetail;
 }
 
 @property (nonatomic, assign) IBOutlet id <MGSplitViewControllerDelegate> delegate;
@@ -54,10 +59,12 @@ typedef enum _MGSplitViewDividerStyle {
 - (IBAction)toggleSplitOrientation:(id)sender; // toggles split axis between vertical (left/right; default) and horizontal (top/bottom).
 - (IBAction)toggleMasterBeforeDetail:(id)sender; // toggles position of master view relative to detail view.
 - (IBAction)toggleMasterView:(id)sender; // toggles display of the master view in the current orientation.
-- (IBAction)showMasterPopover:(id)sender; // shows the master view in a popover spawned from the provided barButtonItem, if it's currently hidden.
-- (void)notePopoverDismissed; // should rarely be needed, because you should not change the popover's delegate. If you must, then call this when it's dismissed.
+- (IBAction)showMGSMasterPopover:(id)sender; // shows the master view in a popover spawned from the provided barButtonItem, if it's currently hidden.
+- (void)toggleMasterViewAnimated:(BOOL)animated;
 
 // Conveniences for you, because I care.
+- (void)hideMasterSlidingPopover;
+- (void)showMasterSlidingPopover;
 - (BOOL)isShowingMaster;
 - (void)setSplitPosition:(float)posn animated:(BOOL)animate; // Allows for animation of splitPosition changes. The property's regular setter is not animated.
 /* Note:	splitPosition is the width (in a left/right split, or height in a top/bottom split) of the master view.

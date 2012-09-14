@@ -4,11 +4,13 @@
 //
 //  Created by Matt Gemmell on 26/07/2010.
 //  Copyright 2010 Instinctive Code.
+//  Copyright 2012 WebIS
 //
 
 #import "MGSplitViewController.h"
 #import "MGSplitDividerView.h"
 #import "MGSplitCornersView.h"
+#import "PopoverManager.h"
 
 #define MG_DEFAULT_SPLIT_POSITION		320.0	// default width of master view in UISplitViewController.
 #define MG_DEFAULT_SPLIT_WIDTH			1.0		// default width of split-gutter in UISplitViewController.
@@ -22,7 +24,6 @@
 
 #define MG_ANIMATION_CHANGE_SPLIT_ORIENTATION	@"ChangeSplitOrientation"	// Animation ID for internal use.
 #define MG_ANIMATION_CHANGE_SUBVIEWS_ORDER		@"ChangeSubviewsOrder"	// Animation ID for internal use.
-
 
 @interface MGSplitViewController (MGPrivateMethods)
 
@@ -41,6 +42,111 @@
 
 @implementation MGSplitViewController
 
+#pragma mark - Hide/Show Master 5.0 Popover style
+
+- (void)hideMasterSlidingPopover
+{
+	hiddenViewControllerDisplayed = NO;	
+
+	[clearViewForMasterOnDetail removeGestureRecognizer:tapGestureRecognizerForMasterOnDetail];
+	[tapGestureRecognizerForMasterOnDetail release];
+	tapGestureRecognizerForMasterOnDetail = nil;
+	
+	[UIView animateWithDuration:0.25f
+						  delay:0.0f
+						options:UIViewAnimationCurveEaseInOut
+					 animations:^{
+						 
+						 [self _displayMasterPopover];
+
+						 clearViewForMasterOnDetail.backgroundColor = [UIColor clearColor];
+					 } completion:^(BOOL finished) {
+						 [clearViewForMasterOnDetail removeFromSuperview];
+						 [clearViewForMasterOnDetail release];
+						 clearViewForMasterOnDetail = nil;
+					 }];
+}
+
+- (void)showMasterSlidingPopover
+{
+	hiddenViewControllerDisplayed = YES;
+	
+	[self.view bringSubviewToFront: self.masterViewController.view];
+	
+	//one tap anywhere on the detail
+	clearViewForMasterOnDetail = [[UIView alloc] initWithFrame:self.detailViewController.view.frame];
+	clearViewForMasterOnDetail.backgroundColor = [UIColor clearColor];
+	[self.detailViewController.view addSubview:clearViewForMasterOnDetail];
+	
+	tapGestureRecognizerForMasterOnDetail = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideMasterSlidingPopover)];
+	[clearViewForMasterOnDetail addGestureRecognizer:tapGestureRecognizerForMasterOnDetail];
+	
+	[UIView animateWithDuration:0.4f
+						  delay:0.0f
+						options:UIViewAnimationCurveEaseInOut
+					 animations:^{
+						 [self _displayMasterPopover];
+						 clearViewForMasterOnDetail.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.2];
+					 } completion:^(BOOL finished) {
+						 
+					 }];
+}
+
+//based off layoutsubviews
+- (void)_displayMasterPopover
+{
+	// Layout the master, detail and divider views appropriately, adding/removing subviews as needed.
+	// First obtain relevant geometry.
+	CGSize fullSize = [self splitViewSizeForOrientation:[UIApplication sharedApplication].statusBarOrientation];
+	float width = fullSize.width;
+	float height = fullSize.height;
+	
+	// Layout the master
+	CGRect newFrame = CGRectMake(0, 0, width, height);
+	UIViewController *controller;
+	UIView *theView;
+	BOOL masterFirst = [self isMasterBeforeDetail];
+
+	CGRect masterRect;
+	if (masterFirst) {
+		if (!hiddenViewControllerDisplayed) {
+			// Move off-screen.
+			newFrame.origin.x -= (_splitPosition + _splitWidth);
+		}
+		
+		newFrame.size.width = _splitPosition;
+		masterRect = newFrame;
+	}
+	else
+		masterRect = newFrame; //this is just here for CLANG
+//	else {
+//		if (!hiddenViewControllerDisplayed) {
+//			// Move off-screen.
+//			newFrame.size.width += (_splitPosition + _splitWidth);
+//		}
+//		
+//		newFrame.size.width -= (_splitPosition + _splitWidth);
+//		newFrame.origin.x += newFrame.size.width;
+//		newFrame.size.width = _splitWidth;
+//		newFrame.origin.x += newFrame.size.width;
+//		newFrame.size.width = _splitPosition;
+//		masterRect = newFrame;
+//	}
+	
+	// Position master.
+	controller = self.masterViewController;
+	if (controller && [controller isKindOfClass:[UIViewController class]])  {
+		theView = controller.view;
+		if (theView) {
+			theView.frame = masterRect;
+			if (!theView.superview) {
+				[controller viewWillAppear:NO];
+				[self.view addSubview:theView];
+				[controller viewDidAppear:NO];
+			}
+		}
+	}
+}
 
 #pragma mark -
 #pragma mark Orientation helpers
@@ -148,10 +254,13 @@
 - (void)dealloc
 {
 	_delegate = nil;
+    [self.masterViewController willMoveToParentViewController:nil];
+    [self.detailViewController willMoveToParentViewController:nil];
 	[self.view.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    [self.masterViewController removeFromParentViewController];
+    [self.detailViewController removeFromParentViewController];
 	[_viewControllers release];
 	[_barButtonItem release];
-	[_hiddenPopoverController release];
 	[_dividerView release];
 	[_cornerViews release];
 	
@@ -165,7 +274,15 @@
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
 {
-    return YES;
+    if (self.masterViewController && self.detailViewController) {
+        return [self.masterViewController shouldAutorotateToInterfaceOrientation:interfaceOrientation] && [self.detailViewController shouldAutorotateToInterfaceOrientation:interfaceOrientation];
+    } else if (self.masterViewController) {
+        return [self.masterViewController shouldAutorotateToInterfaceOrientation:interfaceOrientation];
+    } else if (self.detailViewController) {
+        return [self.detailViewController shouldAutorotateToInterfaceOrientation:interfaceOrientation];
+    } else {
+        return YES;
+    }
 }
 
 
@@ -186,41 +303,46 @@
 - (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation 
 										 duration:(NSTimeInterval)duration
 {
-	[self.masterViewController willAnimateRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
-	[self.detailViewController willAnimateRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
+	/*
+	 I changed the order of this to do the layout first and then the willAnimate
+	 */
 	
 	// Hide popover.
-	if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-		[_hiddenPopoverController dismissPopoverAnimated:NO];
+	if (hiddenViewControllerDisplayed) {
+		[self hideMasterSlidingPopover];
 	}
-	
+
 	// Re-tile views.
 	_reconfigurePopup = YES;
 	[self layoutSubviewsForInterfaceOrientation:toInterfaceOrientation withAnimation:YES];
+
+	[self.masterViewController willAnimateRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
+	[self.detailViewController willAnimateRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
 }
 
+//
+//- (void)willAnimateFirstHalfOfRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
+//{
+//	[self.masterViewController willAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
+//	[self.detailViewController willAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
+//}
+//
+//
+//- (void)didAnimateFirstHalfOfRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
+//{
+//	[self.masterViewController didAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation];
+//	[self.detailViewController didAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation];
+//}
+//
+//
+//- (void)willAnimateSecondHalfOfRotationFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation duration:(NSTimeInterval)duration
+//{
+//	[self.masterViewController willAnimateSecondHalfOfRotationFromInterfaceOrientation:fromInterfaceOrientation duration:duration];
+//	[self.detailViewController willAnimateSecondHalfOfRotationFromInterfaceOrientation:fromInterfaceOrientation duration:duration];
+//}
 
-- (void)willAnimateFirstHalfOfRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
-{
-	[self.masterViewController willAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
-	[self.detailViewController willAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
-}
 
-
-- (void)didAnimateFirstHalfOfRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
-{
-	[self.masterViewController didAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation];
-	[self.detailViewController didAnimateFirstHalfOfRotationToInterfaceOrientation:toInterfaceOrientation];
-}
-
-
-- (void)willAnimateSecondHalfOfRotationFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation duration:(NSTimeInterval)duration
-{
-	[self.masterViewController willAnimateSecondHalfOfRotationFromInterfaceOrientation:fromInterfaceOrientation duration:duration];
-	[self.detailViewController willAnimateSecondHalfOfRotationFromInterfaceOrientation:fromInterfaceOrientation duration:duration];
-}
-
-
+/* original
 - (CGSize)splitViewSizeForOrientation:(UIInterfaceOrientation)theOrientation
 {
 	UIScreen *screen = [UIScreen mainScreen];
@@ -246,6 +368,45 @@
 	
 	return CGSizeMake(width, height);
 }
+ */
+
+- (CGSize)splitViewSizeForOrientation:(UIInterfaceOrientation)theOrientation
+{
+	UIScreen *screen = [UIScreen mainScreen];
+	CGRect fullScreenRect = screen.bounds; // always implicitly in Portrait orientation.
+	CGRect appFrame = screen.applicationFrame;
+	
+	// Find status bar height by checking which dimension of the applicationFrame is narrower than screen bounds.
+	// Little bit ugly looking, but it'll still work even if they change the status bar height in future.
+	float statusBarHeight = MAX((fullScreenRect.size.width - appFrame.size.width), (fullScreenRect.size.height - appFrame.size.height));
+	
+	float navigationBarHeight = 0;
+	if ((self.navigationController)&&(!self.navigationController.navigationBarHidden)) {
+		navigationBarHeight = self.navigationController.navigationBar.frame.size.height;
+	}
+    
+    CGFloat tabBarHeight = 0;
+    if (self.tabBarController) {
+        tabBarHeight = self.tabBarController.tabBar.frame.size.height;
+    }
+	
+	// Initially assume portrait orientation.
+	float width = fullScreenRect.size.width;
+	float height = fullScreenRect.size.height;
+	
+	// Correct for orientation.
+	if (UIInterfaceOrientationIsLandscape(theOrientation)) {
+		width = height;
+		height = fullScreenRect.size.width;
+	}
+	
+	// Account for status bar, which always subtracts from the height (since it's always at the top of the screen).
+	height -= statusBarHeight;
+	height -= navigationBarHeight;
+    height -= tabBarHeight;
+	
+	return CGSizeMake(width, height);
+}
 
 
 - (void)layoutSubviewsForInterfaceOrientation:(UIInterfaceOrientation)theOrientation withAnimation:(BOOL)animate
@@ -260,7 +421,7 @@
 	float width = fullSize.width;
 	float height = fullSize.height;
 	
-	if (NO) { // Just for debugging.
+	if (YES) { // Just for debugging.
 		NSLog(@"Target orientation is %@, dimensions will be %.0f x %.0f", 
 			  [self nameOfInterfaceOrientation:theOrientation], width, height);
 	}
@@ -316,33 +477,41 @@
 			if (theView) {
 				theView.frame = masterRect;
 				if (!theView.superview) {
-					[controller viewWillAppear:NO];
+                    [self addChildViewController:controller]; 
 					[self.view addSubview:theView];
-					[controller viewDidAppear:NO];
+                    [controller didMoveToParentViewController:self];
 				}
 			}
 		}
 		
-		// Position divider.
-		theView = _dividerView;
-		theView.frame = dividerRect;
-		if (!theView.superview) {
-			[self.view addSubview:theView];
-		}
-		
-		// Position detail.
-		controller = self.detailViewController;
-		if (controller && [controller isKindOfClass:[UIViewController class]])  {
-			theView = controller.view;
-			if (theView) {
-				theView.frame = detailRect;
-				if (!theView.superview) {
-					[self.view insertSubview:theView aboveSubview:self.masterViewController.view];
-				} else {
-					[self.view bringSubviewToFront:theView];
-				}
+		if (hiddenViewControllerDisplayed == NO)
+		{
+			// Position divider.
+			theView = _dividerView;
+			theView.frame = dividerRect;
+			if (!theView.superview) {
+				[self.view addSubview:theView];
 			}
-		}
+			
+			// Position detail.
+			controller = self.detailViewController;
+			if (controller && [controller isKindOfClass:[UIViewController class]])  {
+				theView = controller.view;
+				if (theView) {
+					theView.frame = detailRect;
+					
+					NSLog(@"DetailViewer %@ frame set: %@", theView, NSStringFromCGRect(detailRect));
+					
+					if (!theView.superview) {
+						[self addChildViewController:controller]; 
+						[self.view insertSubview:theView aboveSubview:self.masterViewController.view];
+						[controller didMoveToParentViewController:self];
+					} else {
+						[self.view bringSubviewToFront:theView];
+					}
+				}
+			}	
+		}		
 		
 	} else {
 		// Master above, detail below (or vice versa).
@@ -389,9 +558,9 @@
 			if (theView) {
 				theView.frame = masterRect;
 				if (!theView.superview) {
-					[controller viewWillAppear:NO];
+                    [self addChildViewController:controller]; 
 					[self.view addSubview:theView];
-					[controller viewDidAppear:NO];
+                    [controller didMoveToParentViewController:self];
 				}
 			}
 		}
@@ -419,8 +588,8 @@
 	}
 	
 	// Create corner views if necessary.
-	MGSplitCornersView *leadingCorners; // top/left of screen in vertical/horizontal split.
-	MGSplitCornersView *trailingCorners; // bottom/right of screen in vertical/horizontal split.
+	MGSplitCornersView *leadingCorners = nil; // top/left of screen in vertical/horizontal split.
+	MGSplitCornersView *trailingCorners = nil; // bottom/right of screen in vertical/horizontal split.
 	if (!_cornerViews) {
 		CGRect cornerRect = CGRectMake(0, 0, 10, 10); // arbitrary, will be resized below.
 		leadingCorners = [[MGSplitCornersView alloc] initWithFrame:cornerRect];
@@ -496,11 +665,6 @@
 {
 	[super viewWillAppear:animated];
 	
-	if ([self isShowingMaster]) {
-		[self.masterViewController viewWillAppear:animated];
-	}
-	[self.detailViewController viewWillAppear:animated];
-	
 	_reconfigurePopup = YES;
 	[self layoutSubviews];
 }
@@ -509,11 +673,6 @@
 - (void)viewDidAppear:(BOOL)animated
 {
 	[super viewDidAppear:animated];
-	
-	if ([self isShowingMaster]) {
-		[self.masterViewController viewDidAppear:animated];
-	}
-	[self.detailViewController viewDidAppear:animated];
 }
 
 
@@ -538,6 +697,15 @@
 	[self.detailViewController viewDidDisappear:animated];
 }
 
+- (void)dismissModalViewControllerAnimated:(BOOL)animated
+{
+	[self.detailViewController dismissModalViewControllerAnimated:animated];
+}
+
+- (void)presentModalViewController:(UIViewController *)modalViewController animated:(BOOL)animated
+{
+	[self.detailViewController presentModalViewController:modalViewController animated:animated];
+}
 
 #pragma mark -
 #pragma mark Popover handling
@@ -547,41 +715,33 @@
 {
 	_reconfigurePopup = NO;
 	
-	if ((inPopover && _hiddenPopoverController) || (!inPopover && !_hiddenPopoverController) || !self.masterViewController) {
+	if ((inPopover && hasHiddenViewController) || (!inPopover && !hasHiddenViewController) || !self.masterViewController) {
 		// Nothing to do.
 		return;
 	}
 	
-	if (inPopover && !_hiddenPopoverController && !_barButtonItem) {
+	if (inPopover && !hasHiddenViewController && !_barButtonItem) {
 		// Create and configure popover for our masterViewController.
-		[_hiddenPopoverController release];
-		_hiddenPopoverController = nil;
-		[self.masterViewController viewWillDisappear:NO];
-		_hiddenPopoverController = [[UIPopoverController alloc] initWithContentViewController:self.masterViewController];
-		[self.masterViewController viewDidDisappear:NO];
 		
+		[self.masterViewController viewWillDisappear:NO];
+		hasHiddenViewController = YES;
+		[self.masterViewController viewDidDisappear:NO];
+
 		// Create and configure _barButtonItem.
-		_barButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Master", nil) 
-														  style:UIBarButtonItemStyleBordered 
-														 target:self 
-														 action:@selector(showMasterPopover:)];
+		_barButtonItem = [[UIBarButtonItem alloc] initWithImage: [UIImage imageNamed: @"arrow_left.png"]
+														  style: UIBarButtonItemStyleBordered 
+														 target: self 
+														 action: @selector(showMGSMasterPopover:)];
 		
 		// Inform delegate of this state of affairs.
 		if (_delegate && [_delegate respondsToSelector:@selector(splitViewController:willHideViewController:withBarButtonItem:forPopoverController:)]) {
 			[(NSObject <MGSplitViewControllerDelegate> *)_delegate splitViewController:self 
 																willHideViewController:self.masterViewController 
 																	 withBarButtonItem:_barButtonItem 
-																  forPopoverController:_hiddenPopoverController];
+																  forPopoverController:nil];
 		}
 		
-	} else if (!inPopover && _hiddenPopoverController && _barButtonItem) {
-		// I know this looks strange, but it fixes a bizarre issue with UIPopoverController leaving masterViewController's views in disarray.
-		[_hiddenPopoverController presentPopoverFromRect:CGRectZero inView:self.view permittedArrowDirections:UIPopoverArrowDirectionAny animated:NO];
-		
-		// Remove master from popover and destroy popover, if it exists.
-		[_hiddenPopoverController dismissPopoverAnimated:NO];
-		[_hiddenPopoverController release];
-		_hiddenPopoverController = nil;
+	} else if (!inPopover && hasHiddenViewController && _barButtonItem) {
 		
 		// Inform delegate that the _barButtonItem will become invalid.
 		if (_delegate && [_delegate respondsToSelector:@selector(splitViewController:willShowViewController:invalidatingBarButtonItem:)]) {
@@ -589,6 +749,8 @@
 																willShowViewController:self.masterViewController 
 															 invalidatingBarButtonItem:_barButtonItem];
 		}
+		
+		hasHiddenViewController = NO;
 		
 		// Destroy _barButtonItem.
 		[_barButtonItem release];
@@ -605,13 +767,8 @@
 
 - (void)popoverControllerDidDismissPopover:(UIPopoverController *)popoverController
 {
-	[self reconfigureForMasterInPopover:NO];
-}
-
-
-- (void)notePopoverDismissed
-{
-	[self popoverControllerDidDismissPopover:_hiddenPopoverController];
+	[self.view addSubview: self.masterViewController.view];
+	[self layoutSubviewsWithAnimation:NO];
 }
 
 
@@ -656,7 +813,6 @@
 	}
 }
 
-
 - (IBAction)toggleMasterBeforeDetail:(id)sender
 {
 	BOOL showingMaster = [self isShowingMaster];
@@ -677,11 +833,11 @@
 	}
 }
 
-
-- (IBAction)toggleMasterView:(id)sender
+//this is Alex's change
+- (void)toggleMasterViewAnimated:(BOOL)animated
 {
-	if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-		[_hiddenPopoverController dismissPopoverAnimated:NO];
+	if (hiddenViewControllerDisplayed) {
+		[self hideMasterSlidingPopover];
 	}
 	
 	if (![self isShowingMaster]) {
@@ -692,28 +848,41 @@
 	}
 	
 	// This action functions on the current primary orientation; it is independent of the other primary orientation.
-	[UIView beginAnimations:@"toggleMaster" context:nil];
+	if (animated)
+		[UIView beginAnimations:@"toggleMaster" context:nil];
 	if (self.isLandscape) {
 		self.showsMasterInLandscape = !_showsMasterInLandscape;
 	} else {
 		self.showsMasterInPortrait = !_showsMasterInPortrait;
 	}
-	[UIView commitAnimations];
+	if (animated)
+		[UIView commitAnimations];
 }
 
-
-- (IBAction)showMasterPopover:(id)sender
+- (IBAction)toggleMasterView:(id)sender
 {
-	if (_hiddenPopoverController && !(_hiddenPopoverController.popoverVisible)) {
-		// Inform delegate.
-		if (_delegate && [_delegate respondsToSelector:@selector(splitViewController:popoverController:willPresentViewController:)]) {
-			[(NSObject <MGSplitViewControllerDelegate> *)_delegate splitViewController:self 
-																	 popoverController:_hiddenPopoverController 
-															 willPresentViewController:self.masterViewController];
+	[self toggleMasterViewAnimated:YES];
+}
+
+- (IBAction)showMGSMasterPopover:(id)sender
+{
+	if (hasHiddenViewController)
+	{
+		if (hiddenViewControllerDisplayed)
+		{
+			[self hideMasterSlidingPopover];
 		}
-		
-		// Show popover.
-		[_hiddenPopoverController presentPopoverFromBarButtonItem:_barButtonItem permittedArrowDirections:UIPopoverArrowDirectionAny animated:YES];
+		else
+		{
+			// Inform delegate.
+			if (_delegate && [_delegate respondsToSelector:@selector(splitViewController:popoverController:willPresentViewController:)]) {
+				[(NSObject <MGSplitViewControllerDelegate> *)_delegate splitViewController:self 
+																		 popoverController:nil 
+																 willPresentViewController:self.masterViewController];
+			}
+
+			[self showMasterSlidingPopover];
+		}		
 	}
 }
 
@@ -749,12 +918,13 @@
 		_showsMasterInPortrait = flag;
 		
 		if (![self isLandscape]) { // i.e. if this will cause a visual change.
-			if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-				[_hiddenPopoverController dismissPopoverAnimated:NO];
-			}
+//			if (hiddenViewControllerDisplayed) {
+//				[self hideMaster];
+//			}
 			
 			// Rearrange views.
-			_reconfigurePopup = YES;
+			if (hiddenViewControllerDisplayed == NO)
+				_reconfigurePopup = YES;
 			[self layoutSubviews];
 		}
 	}
@@ -773,12 +943,13 @@
 		_showsMasterInLandscape = flag;
 		
 		if ([self isLandscape]) { // i.e. if this will cause a visual change.
-			if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-				[_hiddenPopoverController dismissPopoverAnimated:NO];
-			}
+//			if (hiddenViewControllerDisplayed) {
+//				[self hideMasterSlidingPopover];
+//			}
 			
 			// Rearrange views.
-			_reconfigurePopup = YES;
+			if (hiddenViewControllerDisplayed == NO)
+				_reconfigurePopup = YES;
 			[self layoutSubviews];
 		}
 	}
@@ -794,8 +965,8 @@
 - (void)setVertical:(BOOL)flag
 {
 	if (flag != _vertical) {
-		if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-			[_hiddenPopoverController dismissPopoverAnimated:NO];
+		if (hiddenViewControllerDisplayed) {
+			[self hideMasterSlidingPopover];
 		}
 		
 		_vertical = flag;
@@ -819,8 +990,8 @@
 - (void)setMasterBeforeDetail:(BOOL)flag
 {
 	if (flag != _masterBeforeDetail) {
-		if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-			[_hiddenPopoverController dismissPopoverAnimated:NO];
+		if (hiddenViewControllerDisplayed) {
+			[self hideMasterSlidingPopover];
 		}
 		
 		_masterBeforeDetail = flag;
@@ -856,8 +1027,8 @@
 	}
 	
 	if (constrained) {
-		if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-			[_hiddenPopoverController dismissPopoverAnimated:NO];
+		if (hiddenViewControllerDisplayed) {
+			[self hideMasterSlidingPopover];
 		}
 		
 		_splitPosition = newPosn;
@@ -921,8 +1092,10 @@
 		[_viewControllers release];
 		_viewControllers = [[NSMutableArray alloc] initWithCapacity:2];
 		if (controllers && [controllers count] >= 2) {
-			self.masterViewController = [controllers objectAtIndex:0];
-			self.detailViewController = [controllers objectAtIndex:1];
+			
+			//we don't need to layout subiviews until after we've set them
+			[self _setMasterViewController: controllers[0]];
+			[self _setDetailViewController: controllers[1]];
 		} else {
 			NSLog(@"Error: %@ requires 2 view-controllers. (%@)", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
 		}
@@ -935,7 +1108,7 @@
 - (UIViewController *)masterViewController
 {
 	if (_viewControllers && [_viewControllers count] > 0) {
-		NSObject *controller = [_viewControllers objectAtIndex:0];
+		id controller = [_viewControllers objectAtIndex:0];
 		if ([controller isKindOfClass:[UIViewController class]]) {
 			return [[controller retain] autorelease];
 		}
@@ -944,8 +1117,7 @@
 	return nil;
 }
 
-
-- (void)setMasterViewController:(UIViewController *)master
+- (BOOL)_setMasterViewController:(UIViewController *)master
 {
 	if (!_viewControllers) {
 		_viewControllers = [[NSMutableArray alloc] initWithCapacity:2];
@@ -967,8 +1139,13 @@
 	} else {
 		[_viewControllers addObject:newMaster];
 	}
-	
-	if (changed) {
+
+	return changed;
+}
+
+- (void)setMasterViewController:(UIViewController *)master
+{
+	if ([self _setMasterViewController:master]) {
 		[self layoutSubviews];
 	}
 }
@@ -977,7 +1154,7 @@
 - (UIViewController *)detailViewController
 {
 	if (_viewControllers && [_viewControllers count] > 1) {
-		NSObject *controller = [_viewControllers objectAtIndex:1];
+		id controller = [_viewControllers objectAtIndex:1];
 		if ([controller isKindOfClass:[UIViewController class]]) {
 			return [[controller retain] autorelease];
 		}
@@ -986,8 +1163,7 @@
 	return nil;
 }
 
-
-- (void)setDetailViewController:(UIViewController *)detail
+- (BOOL)_setDetailViewController:(UIViewController *)detail
 {
 	if (!_viewControllers) {
 		_viewControllers = [[NSMutableArray alloc] initWithCapacity:2];
@@ -1006,7 +1182,12 @@
 		[_viewControllers addObject:detail];
 	}
 	
-	if (changed) {
+	return changed;
+}
+
+- (void)setDetailViewController:(UIViewController *)detail
+{
+	if ([self _setDetailViewController:detail]) {
 		[self layoutSubviews];
 	}
 }
@@ -1059,8 +1240,8 @@
 
 - (void)setDividerStyle:(MGSplitViewDividerStyle)newStyle
 {
-	if (_hiddenPopoverController && _hiddenPopoverController.popoverVisible) {
-		[_hiddenPopoverController dismissPopoverAnimated:NO];
+	if (hiddenViewControllerDisplayed) {
+		[self hideMasterSlidingPopover];
 	}
 	
 	// We don't check to see if newStyle equals _dividerStyle, because it's a meta-setting.
@@ -1068,7 +1249,7 @@
 	_dividerStyle = newStyle;
 	
 	// Reconfigure general appearance and behaviour.
-	float cornerRadius;
+	float cornerRadius = MG_DEFAULT_CORNER_RADIUS;
 	if (_dividerStyle == MGSplitViewDividerStyleThin) {
 		cornerRadius = MG_DEFAULT_CORNER_RADIUS;
 		_splitWidth = MG_DEFAULT_SPLIT_WIDTH;
